@@ -1,5 +1,6 @@
 #include "BLDCMotor.h"
 #include "math.h"
+#include "Print.h"
 #include "fix.h"
 
 // BLDCMotor( int pp , float R)
@@ -285,30 +286,30 @@ void BLDCMotor::loopFOC() {
       break;
     case TorqueControlType::foc_current:
       if(!current_sense) return;
-      // read dq currents
+      // 读取Id和Iq
       current = current_sense->getFOCCurrents(electrical_angle);
-      // filter values
+      // 滤波Iq和Id
       current.q = LPF_current_q(current.q);
       current.d = LPF_current_d(current.d);
-      // calculate the phase voltages
+      // 计算相电压
       voltage.q = PID_current_q(current_sp - current.q);
       voltage.d = PID_current_d(-current.d);
       break;
     default:
-      // no torque control selected
-      if(monitor_port) monitor_port->println("MOT: no torque control selected!");
+      // 没有选择扭矩控制
+      if(monitor_port) monitor_port->println("MOT: 没有选择扭矩控制!");
       break;
   }
 
-  // set the phase voltage - FOC heart function :)
+  //! 设置相位电压--FOC最重要功能 
   setPhaseVoltage(voltage.q, voltage.d, electrical_angle);
 }
 
-// Iterative function running outer loop of the FOC algorithm
-// Behavior of this function is determined by the motor.controller variable
-// It runs either angle, velocity or torque loop
-// - needs to be called iteratively it is asynchronous function
-// - if target is not set it uses motor.target value
+// 运行FOC算法外循环的迭代函数
+// 这个函数的行为是由电机控制器变量决定的。
+// 它可以运行角度、速度或扭矩循环
+// - 需要迭代调用，它是一个异步函数
+// 如果目标没有设置，则使用电机的目标值。
 void BLDCMotor::move(float new_target) {
 
   // downsampling (optional)
@@ -391,12 +392,12 @@ void BLDCMotor::move(float new_target) {
 }
 
 
-// Method using FOC to set Uq and Ud to the motor at the optimal angle
-// Function implementing Space Vector PWM and Sine PWM algorithms
+// 使用FOC将Uq和Ud设置为电机的最佳角度的方法
+// 实现空间矢量PWM和正弦PWM算法的函数
 //
-// Function using sine approximation
-// regular sin + cos ~300us    (no memory usaage)
-// approx  _sin + _cos ~110us  (400Byte ~ 20% of memory)
+// 使用正弦近似法的函数
+// 常规 sin + cos ~300us (无内存使用)
+// 近似_sin + _cos ~110us (400Byte ~ 20%的内存)
 void BLDCMotor::setPhaseVoltage(float Uq, float Ud, float angle_el) {
 
   float center;
@@ -405,97 +406,7 @@ void BLDCMotor::setPhaseVoltage(float Uq, float Ud, float angle_el) {
 
   switch (foc_modulation)
   {
-    case FOCModulationType::Trapezoid_120 :
-      // see https://www.youtube.com/watch?v=InzXA7mWBWE Slide 5
-      static int trap_120_map[6][3] = {
-        {_HIGH_IMPEDANCE,1,-1},{-1,1,_HIGH_IMPEDANCE},{-1,_HIGH_IMPEDANCE,1},{_HIGH_IMPEDANCE,-1,1},{1,-1,_HIGH_IMPEDANCE},{1,_HIGH_IMPEDANCE,-1} // each is 60 degrees with values for 3 phases of 1=positive -1=negative 0=high-z
-      };
-      // static int trap_120_state = 0;
-      sector = 6 * (_normalizeAngle(angle_el + _PI_6 ) / _2PI); // adding PI/6 to align with other modes
-      // centering the voltages around either
-      // modulation_centered == true > driver.volage_limit/2
-      // modulation_centered == false > or Adaptable centering, all phases drawn to 0 when Uq=0
-      center = modulation_centered ? (driver->voltage_limit)/2 : Uq;
-
-      if(trap_120_map[sector][0]  == _HIGH_IMPEDANCE){
-        Ua= center;
-        Ub = trap_120_map[sector][1] * Uq + center;
-        Uc = trap_120_map[sector][2] * Uq + center;
-        driver->setPhaseState(_HIGH_IMPEDANCE, _ACTIVE, _ACTIVE); // disable phase if possible
-      }else if(trap_120_map[sector][1]  == _HIGH_IMPEDANCE){
-        Ua = trap_120_map[sector][0] * Uq + center;
-        Ub = center;
-        Uc = trap_120_map[sector][2] * Uq + center;
-        driver->setPhaseState(_ACTIVE, _HIGH_IMPEDANCE, _ACTIVE);// disable phase if possible
-      }else{
-        Ua = trap_120_map[sector][0] * Uq + center;
-        Ub = trap_120_map[sector][1] * Uq + center;
-        Uc = center;
-        driver->setPhaseState(_ACTIVE,_ACTIVE, _HIGH_IMPEDANCE);// disable phase if possible
-      }
-
-    break;
-
-    case FOCModulationType::Trapezoid_150 :
-      // see https://www.youtube.com/watch?v=InzXA7mWBWE Slide 8
-      static int trap_150_map[12][3] = {
-        {_HIGH_IMPEDANCE,1,-1},{-1,1,-1},{-1,1,_HIGH_IMPEDANCE},{-1,1,1},{-1,_HIGH_IMPEDANCE,1},{-1,-1,1},{_HIGH_IMPEDANCE,-1,1},{1,-1,1},{1,-1,_HIGH_IMPEDANCE},{1,-1,-1},{1,_HIGH_IMPEDANCE,-1},{1,1,-1} // each is 30 degrees with values for 3 phases of 1=positive -1=negative 0=high-z
-      };
-      // static int trap_150_state = 0;
-      sector = 12 * (_normalizeAngle(angle_el + _PI_6 ) / _2PI); // adding PI/6 to align with other modes
-      // centering the voltages around either
-      // modulation_centered == true > driver.volage_limit/2
-      // modulation_centered == false > or Adaptable centering, all phases drawn to 0 when Uq=0
-      center = modulation_centered ? (driver->voltage_limit)/2 : Uq;
-
-      if(trap_150_map[sector][0]  == _HIGH_IMPEDANCE){
-        Ua= center;
-        Ub = trap_150_map[sector][1] * Uq + center;
-        Uc = trap_150_map[sector][2] * Uq + center;
-        driver->setPhaseState(_HIGH_IMPEDANCE, _ACTIVE, _ACTIVE); // disable phase if possible
-      }else if(trap_150_map[sector][1]  == _HIGH_IMPEDANCE){
-        Ua = trap_150_map[sector][0] * Uq + center;
-        Ub = center;
-        Uc = trap_150_map[sector][2] * Uq + center;
-        driver->setPhaseState(_ACTIVE, _HIGH_IMPEDANCE, _ACTIVE);// disable phase if possible
-      }else{
-        Ua = trap_150_map[sector][0] * Uq + center;
-        Ub = trap_150_map[sector][1] * Uq + center;
-        Uc = center;
-        driver->setPhaseState(_ACTIVE, _ACTIVE, _HIGH_IMPEDANCE);// disable phase if possible
-      }
-
-    break;
-
-    case FOCModulationType::SinePWM :
-      // Sinusoidal PWM modulation
-      // Inverse Park + Clarke transformation
-
-      // angle normalization in between 0 and 2pi
-      // only necessary if using _sin and _cos - approximation functions
-      angle_el = _normalizeAngle(angle_el);
-      _ca = _cos(angle_el);
-      _sa = _sin(angle_el);
-      // Inverse park transform
-      Ualpha =  _ca * Ud - _sa * Uq;  // -sin(angle) * Uq;
-      Ubeta =  _sa * Ud + _ca * Uq;    //  cos(angle) * Uq;
-
-      // center = modulation_centered ? (driver->voltage_limit)/2 : Uq;
-      center = driver->voltage_limit/2;
-      // Clarke transform
-      Ua = Ualpha + center;
-      Ub = -0.5f * Ualpha  + _SQRT3_2 * Ubeta + center;
-      Uc = -0.5f * Ualpha - _SQRT3_2 * Ubeta + center;
-
-      if (!modulation_centered) {
-        float Umin = min(Ua, min(Ub, Uc));
-        Ua -= Umin;
-        Ub -= Umin;
-        Uc -= Umin;
-      }
-
-      break;
-
+    //SVPWM模式
     case FOCModulationType::SpaceVectorPWM :
       // Nice video explaining the SpaceVectorModulation (SVPWM) algorithm
       // https://www.youtube.com/watch?v=QMSWUMEAejg
@@ -574,38 +485,41 @@ void BLDCMotor::setPhaseVoltage(float Uq, float Ud, float angle_el) {
           Tb = 0;
           Tc = 0;
       }
+      default:
+        Print a;
+        a.println("错误");
+        break; // unknown
 
       // calculate the phase voltages and center
       Ua = Ta*driver->voltage_limit;
       Ub = Tb*driver->voltage_limit;
       Uc = Tc*driver->voltage_limit;
       break;
-
   }
 
-  // set the voltages in driver
+  // 设置驱动器中的电压
   driver->setPwm(Ua, Ub, Uc);
 }
 
 
 
-// Function (iterative) generating open loop movement for target velocity
-// - target_velocity - rad/s
-// it uses voltage_limit variable
+// 产生目标速度的开环运动的函数（迭代式）。
+// - 目标速度 - rad/s
+// 它使用电压限制变量
 float BLDCMotor::velocityOpenloop(float target_velocity){
-  // get current timestamp
+  // 获得当前时间戳
   unsigned long now_us = _micros();
-  // calculate the sample time from last call
+  //计算从上次调用开始的采样时间
   float Ts = (now_us - open_loop_timestamp) * 1e-6f;
-  // quick fix for strange cases (micros overflow + timestamp not defined)
+  //快速修复奇怪的情况（micros溢出+未定义时间戳）。
   if(Ts <= 0 || Ts > 0.5f) Ts = 1e-3f;
 
-  // calculate the necessary angle to achieve target velocity
+  // 计算必要的角度以达到目标速度
   shaft_angle = _normalizeAngle(shaft_angle + target_velocity*Ts);
-  // for display purposes
+  // 用于显示目的
   shaft_velocity = target_velocity;
 
-  // use voltage limit or current limit
+  //使用电压限制或电流限制
   float Uq = voltage_limit;
   if(_isset(phase_resistance)) Uq =  current_limit*phase_resistance;
 
